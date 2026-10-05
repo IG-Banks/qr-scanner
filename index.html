@@ -1,0 +1,341 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f4f6f9;color:#172033;font-family:Arial,sans-serif}
+.app{max-width:760px;margin:auto;padding:18px}
+.title{font-size:27px;font-weight:800}
+.sub{color:#667085;margin:5px 0 18px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.tabs button,.actions button{border:0;border-radius:10px;padding:12px 15px;font-weight:700;cursor:pointer}
+.tabs button{background:#e7ebf1;color:#172033}
+.tabs button.active{background:#172033;color:white}
+.card{background:white;border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 5px 18px #0000000d}
+.status{padding:11px;border-radius:10px;background:#eef2f6;margin-top:12px}
+.ok{background:#eaf8ee;color:#166534}
+.err{background:#fff0f0;color:#a61b2b}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.full{grid-column:1/-1}
+label{font-size:12px;font-weight:700;color:#667085;display:block;margin-bottom:5px}
+input,textarea,select{width:100%;padding:12px;border:1px solid #d7dce4;border-radius:9px;font:inherit;background:#fff}
+textarea{min-height:100px;resize:vertical}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.primary{background:#172033;color:#fff}
+.danger{background:#b42318;color:#fff}
+.secondary{background:#e7ebf1;color:#172033}
+.hidden{display:none}
+.search{margin-bottom:10px}
+.list{display:grid;gap:8px}
+.item{border:1px solid #e1e5eb;border-radius:11px;padding:12px;cursor:pointer}
+.item b{display:block}
+.muted{color:#667085;font-size:13px}
+.scanButton{border:0;border-radius:10px;padding:14px 18px;background:#172033;color:#fff;font-weight:700;cursor:pointer;font-size:16px}
+@media(max-width:560px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}
+</style>
+</head>
+
+<body>
+<div class="app">
+  <div class="title">QR Inventory Manager</div>
+  <div class="sub">Scan, view, edit and create inventory items from your Google Sheet.</div>
+
+  <div class="tabs">
+    <button id="scanTab" class="active">Scan QR</button>
+    <button id="addTab">Add Item</button>
+    <button id="listTab">Items</button>
+  </div>
+
+  <section id="scanView">
+    <div class="card">
+      <button id="openScannerBtn" class="scanButton">📷 Open QR Scanner</button>
+      <div id="status" class="status">Click "Open QR Scanner" and allow camera access when prompted.</div>
+    </div>
+  </section>
+
+  <section id="formView" class="hidden">
+    <div class="card">
+      <form id="itemForm">
+        <div class="grid">
+          <div><label>QR ID *</label><input id="QR_ID" required placeholder="e.g. QR001"></div>
+          <div><label>Item Name</label><input id="Item_Name"></div>
+          <div class="full"><label>Description</label><textarea id="Description"></textarea></div>
+          <div><label>Category</label><input id="Category"></div>
+          <div><label>Price</label><input id="Price" inputmode="decimal" placeholder="₦0.00"></div>
+          <div><label>Quantity</label><input id="Quantity" type="number" min="0"></div>
+          <div><label>Status</label><select id="Status"><option>Available</option><option>Out of Stock</option><option>Reserved</option><option>Inactive</option></select></div>
+          <div><label>Location</label><input id="Location"></div>
+          <div class="full"><label>Image URL (optional)</label><input id="Image_URL" type="url" placeholder="https://..."></div>
+        </div>
+        <div class="actions">
+          <button class="primary" type="submit">Save Item</button>
+          <button class="secondary" type="button" id="newBtn">New</button>
+          <button class="danger" type="button" id="deleteBtn">Delete</button>
+        </div>
+      </form>
+      <div id="formStatus" class="status hidden"></div>
+    </div>
+  </section>
+
+  <section id="listView" class="hidden">
+    <div class="card">
+      <input class="search" id="search" placeholder="Search items...">
+      <div id="items" class="list"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+/*
+ * IMPORTANT:
+ * Replace this URL with the public HTTPS URL where scanner.html is hosted.
+ * Example:
+ * https://yourusername.github.io/qr-scanner/scanner.html
+ */
+const SCANNER_URL = 'https://ig-banks.github.io/qr-scanner/scanner.html';
+
+let currentMode='scan', items=[];
+
+const fields=['QR_ID','Item_Name','Description','Category','Price','Quantity','Status','Location','Image_URL'];
+
+function $(id){return document.getElementById(id)}
+
+function esc(s){
+  return String(s??'').replace(/[&<>"']/g,c=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]))
+}
+
+function show(tab){
+  currentMode=tab;
+  ['scanTab','addTab','listTab'].forEach(id=>$(id).classList.remove('active'));
+  ['scanView','formView','listView'].forEach(id=>$(id).classList.add('hidden'));
+
+  if(tab==='scan'){
+    $('scanTab').classList.add('active');
+    $('scanView').classList.remove('hidden');
+  }
+
+  if(tab==='form'){
+    $('addTab').classList.add('active');
+    $('formView').classList.remove('hidden');
+  }
+
+  if(tab==='list'){
+    $('listTab').classList.add('active');
+    $('listView').classList.remove('hidden');
+    loadItems();
+  }
+}
+
+function setStatus(el,text,type=''){
+  el.className='status '+type;
+  el.textContent=text;
+}
+
+function fill(item){
+  fields.forEach(k=>$(k).value=item?.[k]||'');
+  show('form');
+  setStatus($('formStatus'),'Editing '+(item?.QR_ID||'new item'),'');
+}
+
+function clearForm(){
+  fields.forEach(k=>$(k).value=k==='Status'?'Available':'');
+  $('formStatus').classList.add('hidden');
+}
+
+function loadItems(){
+  $('items').innerHTML='<div class="muted">Loading...</div>';
+
+  google.script.run
+    .withSuccessHandler(data=>{
+      items=data||[];
+      renderItems();
+    })
+    .withFailureHandler(e=>{
+      $('items').innerHTML='<div class="muted">'+esc(e.message)+'</div>';
+    })
+    .getAllItems();
+}
+
+function renderItems(){
+  const q=$('search').value.toLowerCase().trim();
+  const filtered=items.filter(x=>Object.values(x).join(' ').toLowerCase().includes(q));
+
+  $('items').innerHTML=filtered.length
+    ?filtered.map(x=>`
+      <div class="item" data-id="${esc(x.QR_ID)}">
+        <b>${esc(x.Item_Name||x.QR_ID)}</b>
+        <span class="muted">${esc(x.QR_ID)} · ${esc(x.Status||'')}</span>
+        <div>${esc(x.Description||'')}</div>
+      </div>`).join('')
+    :'<div class="muted">No items found.</div>';
+
+  document.querySelectorAll('.item').forEach(el=>
+    el.addEventListener('click',()=>getItem(el.dataset.id))
+  );
+}
+
+function getItem(id){
+  google.script.run
+    .withSuccessHandler(res=>{
+      if(res.ok){
+        fill(res.item);
+      }else{
+        setStatus($('status'),res.message,'err');
+      }
+    })
+    .withFailureHandler(err=>{
+      setStatus($('status'),err.message||'Unable to load item.','err');
+    })
+    .getItem(id);
+}
+
+/*
+ * Called after scanner.html successfully reads a QR code.
+ * The scanner sends the QR value with window.opener.postMessage().
+ */
+function handleScannedQR(qrText){
+  const text=String(qrText||'').trim();
+
+  if(!text){
+    setStatus($('status'),'The scanner returned an empty QR value.','err');
+    return;
+  }
+
+  setStatus($('status'),'Found '+text+'. Loading item...','');
+
+  google.script.run
+    .withSuccessHandler(res=>{
+      if(res.ok){
+        fill(res.item);
+      }else{
+        // If the QR code is new, open the Add Item form with its QR ID filled in.
+        $('QR_ID').value=text;
+        show('form');
+        setStatus($('formStatus'),res.message+' You can create this item now.','err');
+      }
+    })
+    .withFailureHandler(err=>{
+      setStatus($('status'),err.message||'Unable to load item.','err');
+    })
+    .getItem(text);
+}
+
+/*
+ * Receive a QR result from scanner.html.
+ * We accept messages only from the window we opened.
+ */
+window.addEventListener('message',function(event){
+  if(!window.qrScannerWindow || event.source !== window.qrScannerWindow) return;
+
+  const data=event.data || {};
+
+  if(data.type==='QR_SCANNED'){
+    handleScannedQR(data.text);
+  }
+
+  if(data.type==='QR_SCANNER_ERROR'){
+    setStatus($('status'),data.message||'The QR scanner reported an error.','err');
+  }
+});
+
+function openScanner(){
+  if(!SCANNER_URL || SCANNER_URL.includes('YOUR-SCANNER-URL')){
+    setStatus(
+      $('status'),
+      'Please edit Index.html and replace SCANNER_URL with your scanner.html HTTPS address.',
+      'err'
+    );
+    return;
+  }
+
+  const width=Math.min(600,Math.max(360,window.screen.width-40));
+  const height=Math.min(800,Math.max(600,window.screen.height-100));
+  const left=Math.max(0,(window.screen.width-width)/2);
+  const top=Math.max(0,(window.screen.height-height)/2);
+
+  window.qrScannerWindow=window.open(
+    SCANNER_URL,
+    'QRInventoryScanner',
+    `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+  );
+
+  if(!window.qrScannerWindow){
+    setStatus(
+      $('status'),
+      'The scanner window was blocked. Please allow pop-ups for this Google Apps Script site and try again.',
+      'err'
+    );
+    return;
+  }
+
+  setStatus($('status'),'Scanner opened. Point the camera at a QR code.','');
+}
+
+$('scanTab').onclick=()=>show('scan');
+$('addTab').onclick=()=>{clearForm();show('form')};
+$('listTab').onclick=()=>show('list');
+$('newBtn').onclick=clearForm;
+$('search').addEventListener('input',renderItems);
+$('openScannerBtn').onclick=openScanner;
+
+$('itemForm').addEventListener('submit',e=>{
+  e.preventDefault();
+
+  const item={};
+  fields.forEach(k=>item[k]=$(k).value.trim());
+
+  setStatus($('formStatus'),'Saving...','');
+
+  google.script.run
+    .withSuccessHandler(res=>{
+      if(res.ok){
+        setStatus(
+          $('formStatus'),
+          res.action==='created'?'New item created.':'Item updated successfully.',
+          'ok'
+        );
+        fill(res.item);
+      }else{
+        setStatus($('formStatus'),res.message||'Unable to save item.','err');
+      }
+    })
+    .withFailureHandler(err=>{
+      setStatus($('formStatus'),err.message||'Unable to save item.','err');
+    })
+    .saveItem(item);
+});
+
+$('deleteBtn').onclick=()=>{
+  const id=$('QR_ID').value.trim();
+
+  if(!id){
+    clearForm();
+    return;
+  }
+
+  if(!confirm('Delete '+id+'?'))return;
+
+  google.script.run
+    .withSuccessHandler(res=>{
+      if(res.ok){
+        clearForm();
+        setStatus($('formStatus'),'Item deleted.','ok');
+      }else{
+        setStatus($('formStatus'),res.message,'err');
+      }
+    })
+    .withFailureHandler(err=>{
+      setStatus($('formStatus'),err.message||'Unable to delete item.','err');
+    })
+    .deleteItem(id);
+};
+
+window.addEventListener('load',()=>{
+  show('scan');
+});
+</script>
+</body>
+</html>
