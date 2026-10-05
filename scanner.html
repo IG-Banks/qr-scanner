@@ -1,254 +1,42 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>QR Inventory Scanner</title>
-
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-
 <style>
-*{box-sizing:border-box}
-body{
-  margin:0;
-  background:#111827;
-  color:white;
-  font-family:Arial,sans-serif;
-}
-.app{
-  max-width:650px;
-  margin:auto;
-  padding:18px;
-}
-h1{
-  margin:0 0 6px;
-  font-size:25px;
-}
-.sub{
-  color:#cbd5e1;
-  margin-bottom:16px;
-}
-.card{
-  background:#fff;
-  color:#172033;
-  border-radius:16px;
-  padding:14px;
-}
-#reader{
-  width:100%;
-  overflow:hidden;
-  border-radius:12px;
-}
-.status{
-  padding:12px;
-  margin-top:12px;
-  border-radius:10px;
-  background:#eef2f6;
-  color:#172033;
-}
-.ok{background:#eaf8ee;color:#166534}
-.err{background:#fff0f0;color:#a61b2b}
-button{
-  width:100%;
-  border:0;
-  border-radius:10px;
-  padding:13px;
-  margin-top:10px;
-  background:#172033;
-  color:white;
-  font-weight:700;
-  font-size:15px;
-  cursor:pointer;
-}
-#retryBtn{display:none}
-.small{
-  font-size:13px;
-  color:#cbd5e1;
-  margin-top:12px;
-  line-height:1.5;
-}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:Arial,sans-serif;background:#111827;color:#fff;display:flex;justify-content:center;padding:20px}.container{width:100%;max-width:620px;background:#1f2937;border-radius:16px;padding:20px;box-shadow:0 10px 35px rgba(0,0,0,.35)}h1{text-align:center;margin:0 0 6px;font-size:24px}.sub{text-align:center;color:#cbd5e1;font-size:14px;margin-bottom:18px}.row{display:flex;gap:8px;margin-bottom:12px}select,button{font:inherit;border-radius:8px;border:1px solid #475569}select{flex:1;min-width:0;padding:11px;background:#0f172a;color:#fff}button{padding:11px 15px;cursor:pointer;background:#2563eb;color:#fff;border:0}button:disabled{opacity:.5;cursor:not-allowed}#reader{width:100%;overflow:hidden;border-radius:12px;background:#000;min-height:300px}#reader video{width:100%!important;border-radius:12px}.status{margin-top:14px;padding:12px;border-radius:8px;background:#0f172a;color:#cbd5e1;font-size:14px;line-height:1.5;word-break:break-word}.ok{background:#052e16;color:#bbf7d0}.err{background:#450a0a;color:#fecaca}.warn{background:#422006;color:#fed7aa}.details{margin-top:12px;padding:12px;background:#0f172a;border-radius:8px;font-size:13px;color:#94a3b8;white-space:pre-wrap}.hidden{display:none}.actions{display:flex;gap:8px;margin-top:14px}.actions button{flex:1}.secondary{background:#475569}
 </style>
 </head>
-
 <body>
-<div class="app">
-  <h1>QR Inventory Scanner</h1>
-  <div class="sub">Point the camera at an inventory QR code.</div>
-
-  <div class="card">
-    <div id="reader"></div>
-    <div id="status" class="status">
-      Requesting camera access...
-    </div>
-
-    <button id="retryBtn">Retry Camera</button>
-    <button id="closeBtn">Close Scanner</button>
-  </div>
-
-  <div class="small">
-    Camera access requires HTTPS. If permission is denied, use your browser's
-    site settings to allow camera access, then press Retry Camera.
-  </div>
+<div class="container">
+<h1>QR Inventory Scanner</h1>
+<div class="sub">Select your camera and scan an inventory QR code</div>
+<div class="row"><select id="cameraSelect" disabled><option>Detecting cameras...</option></select><button id="refreshBtn">Refresh</button></div>
+<div id="reader"></div>
+<div id="status" class="status">Checking camera access...</div>
+<div id="details" class="details hidden"></div>
+<div class="actions"><button id="retryBtn">Retry Camera</button><button id="closeBtn" class="secondary">Close Scanner</button></div>
 </div>
-
 <script>
-let scanner=null;
-let scannerStarted=false;
-let scanLocked=false;
-
-function $(id){
-  return document.getElementById(id);
-}
-
-function setStatus(text,type=''){
-  $('status').className='status '+type;
-  $('status').textContent=text;
-}
-
-function sendToParent(type,payload={}){
-  if(window.opener && !window.opener.closed){
-    window.opener.postMessage(
-      Object.assign({type:type},payload),
-      '*'
-    );
-  }
-}
-
-function stopScanner(){
-  if(!scanner || !scannerStarted) return Promise.resolve();
-
-  return scanner.stop()
-    .catch(()=>{})
-    .then(()=>{
-      scannerStarted=false;
-    });
-}
-
-function scanSuccess(decodedText){
-  if(scanLocked) return;
-
-  scanLocked=true;
-
-  const text=String(decodedText||'').trim();
-
-  if(!text){
-    scanLocked=false;
-    return;
-  }
-
-  setStatus('QR found: '+text+' — sending to inventory...','ok');
-
-  sendToParent('QR_SCANNED',{text:text});
-
-  setTimeout(()=>{
-    stopScanner().finally(()=>{
-      if(window.opener && !window.opener.closed){
-        window.close();
-      }
-    });
-  },300);
-}
-
-function scanFailure(errorMessage){
-  // html5-qrcode calls this repeatedly while no QR code is visible.
-  // Do not display every frame's error.
-}
-
-async function startScanner(){
-  scanLocked=false;
-  $('retryBtn').style.display='none';
-  setStatus('Requesting camera permission...');
-
-  try{
-    if(!window.isSecureContext){
-      throw new Error(
-        'Camera access requires a secure HTTPS page. Open scanner.html using HTTPS.'
-      );
-    }
-
-    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      throw new Error(
-        'This browser does not provide camera access on this page.'
-      );
-    }
-
-    // Request permission explicitly before starting html5-qrcode.
-    // This makes the permission prompt/error much clearer.
-    const stream=await navigator.mediaDevices.getUserMedia({
-      video:{
-        facingMode:{ideal:'environment'}
-      },
-      audio:false
-    });
-
-    stream.getTracks().forEach(track=>track.stop());
-
-    if(scanner){
-      try{
-        await stopScanner();
-      }catch(e){}
-    }
-
-    scanner=new Html5Qrcode('reader');
-
-    const config={
-      fps:10,
-      qrbox:{width:250,height:250},
-      aspectRatio:1.0
-    };
-
-    await scanner.start(
-      {facingMode:{ideal:'environment'}},
-      config,
-      scanSuccess,
-      scanFailure
-    );
-
-    scannerStarted=true;
-    setStatus('Camera ready. Point it at a QR code.');
-  }
-  catch(error){
-    console.error(error);
-
-    let message='Unable to access the camera.';
-
-    if(error.name==='NotAllowedError'){
-      message='Camera permission was denied. Allow camera access for this HTTPS scanner page, then press Retry Camera.';
-    }else if(error.name==='NotFoundError'){
-      message='No camera was found on this device.';
-    }else if(error.name==='NotReadableError'){
-      message='The camera is already being used by another application.';
-    }else if(error.name==='SecurityError'){
-      message='The browser blocked camera access for security reasons. Make sure this page is HTTPS.';
-    }else if(error.message){
-      message=error.message;
-    }
-
-    setStatus(message,'err');
-    $('retryBtn').style.display='block';
-
-    sendToParent('QR_SCANNER_ERROR',{message:message});
-  }
-}
-
-$('retryBtn').onclick=startScanner;
-
-$('closeBtn').onclick=()=>{
-  stopScanner().finally(()=>{
-    if(window.opener && !window.opener.closed){
-      window.close();
-    }else{
-      history.back();
-    }
-  });
-};
-
-window.addEventListener('beforeunload',()=>{
-  stopScanner();
-});
-
-window.addEventListener('load',()=>{
-  startScanner();
-});
+let scanner=null,scanning=false,cameras=[],lastScanned=false;
+const statusEl=document.getElementById('status'),detailsEl=document.getElementById('details'),cameraSelect=document.getElementById('cameraSelect'),retryBtn=document.getElementById('retryBtn'),refreshBtn=document.getElementById('refreshBtn'),closeBtn=document.getElementById('closeBtn');
+function setStatus(m,t){statusEl.textContent=m;statusEl.className='status'+(t?' '+t:'')}
+function details(t){detailsEl.textContent=t||'';detailsEl.classList.toggle('hidden',!t)}
+function explain(e){const n=e&&e.name||'',m=e&&e.message||String(e||'');let x='';switch(n){case'NotAllowedError':x='Camera permission was denied or blocked. Allow camera access for ig-banks.github.io and reload this page.';break;case'NotFoundError':x='No camera was found. Check that a webcam/camera is connected and enabled.';break;case'NotReadableError':x='The camera was found but could not be opened. Another application may already be using it. Close Zoom, Teams, WhatsApp, Camera, etc., then retry.';break;case'OverconstrainedError':x='The selected camera does not support the requested settings. Try another camera.';break;case'SecurityError':x='The browser blocked camera access for security reasons. Make sure this page is opened using HTTPS.';break;default:x='The camera could not be opened. Check browser camera permission and make sure no other application is using the camera.'}setStatus(x,'err');details('Browser error: '+(n||'UnknownError')+'\nMessage: '+(m||'No additional message')+'\n\nChrome: click the lock/site-settings icon beside the address bar → Camera → Allow.\nAlso check Windows Settings → Privacy & security → Camera.');}
+async function permission(){if(!window.isSecureContext){setStatus('This scanner must be opened over HTTPS.','err');details('Expected: https://ig-banks.github.io/qr-scanner/scanner.html');return false}if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setStatus('This browser does not provide camera access.','err');details('Try the latest Google Chrome or Microsoft Edge.');return false}try{setStatus('Requesting camera permission...');const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});s.getTracks().forEach(t=>t.stop());setStatus('Camera permission granted. Detecting cameras...','ok');return true}catch(e){explain(e);return false}}
+async function loadCameras(){try{cameras=await Html5Qrcode.getCameras();if(!cameras.length){cameraSelect.innerHTML='<option>No camera detected</option>';setStatus('No camera was detected on this device.','err');details('Check Windows camera settings and make sure the webcam is connected.');return false}cameraSelect.innerHTML='';cameras.forEach((c,i)=>{const o=document.createElement('option');o.value=c.id;o.textContent=c.label||('Camera '+(i+1));cameraSelect.appendChild(o)});const preferred=cameras.find(c=>/back|rear|environment|world|usb/i.test(c.label||''));if(preferred)cameraSelect.value=preferred.id;cameraSelect.disabled=false;return true}catch(e){explain(e);return false}}
+async function stop(){if(!scanner)return;try{if(scanning)await scanner.stop()}catch(e){}try{await scanner.clear()}catch(e){}scanner=null;scanning=false}
+async function start(){await stop();lastScanned=false;details('');const id=cameraSelect.value;if(!id){setStatus('Please select a camera first.','err');return}try{scanner=new Html5Qrcode('reader');await scanner.start(id,{fps:10,qrbox:(w,h)=>{const s=Math.floor(Math.min(w,h)*.72);return{width:Math.max(180,Math.min(s,420)),height:Math.max(180,Math.min(s,420))}},aspectRatio:1,disableFlip:false},onScanSuccess,()=>{});scanning=true;setStatus('Camera is ready. Point it at a QR code.','ok');details('Selected camera: '+(cameraSelect.options[cameraSelect.selectedIndex]?.text||'Camera'))}catch(e){explain(e);await stop()}}
+async function initialize(){if(!window.isSecureContext){setStatus('SECURITY ERROR: Open this scanner using HTTPS.','err');details(location.href);return}if(await permission()&&await loadCameras())await start()}
+function onScanSuccess(text){if(lastScanned)return;lastScanned=true;setStatus('QR code found: '+text,'ok');details('Sending the QR code to the Inventory Manager...');if(window.opener&&!window.opener.closed){window.opener.postMessage({type:'QR_SCANNED',text:text},'*');setTimeout(async()=>{await stop();window.close()},400)}else{setStatus('QR code found, but the Inventory Manager window is not available.','warn');details('QR value: '+text)}}
+retryBtn.onclick=async()=>{retryBtn.disabled=true;setStatus('Retrying camera...');await stop();if(await permission()&&await loadCameras())await start();retryBtn.disabled=false};
+refreshBtn.onclick=async()=>{refreshBtn.disabled=true;await stop();if(await permission()&&await loadCameras())await start();refreshBtn.disabled=false};
+cameraSelect.onchange=()=>{if(scanning)start()};
+closeBtn.onclick=async()=>{await stop();if(window.opener&&!window.opener.closed)window.close();else setStatus('Scanner stopped. You can close this browser tab.','warn')};
+window.addEventListener('beforeunload',()=>{if(scanner&&scanning)scanner.stop().catch(()=>{})});
+initialize();
 </script>
 </body>
 </html>
