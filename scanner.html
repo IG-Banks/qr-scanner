@@ -1,0 +1,254 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>QR Inventory Scanner</title>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:#111827;
+  color:white;
+  font-family:Arial,sans-serif;
+}
+.app{
+  max-width:650px;
+  margin:auto;
+  padding:18px;
+}
+h1{
+  margin:0 0 6px;
+  font-size:25px;
+}
+.sub{
+  color:#cbd5e1;
+  margin-bottom:16px;
+}
+.card{
+  background:#fff;
+  color:#172033;
+  border-radius:16px;
+  padding:14px;
+}
+#reader{
+  width:100%;
+  overflow:hidden;
+  border-radius:12px;
+}
+.status{
+  padding:12px;
+  margin-top:12px;
+  border-radius:10px;
+  background:#eef2f6;
+  color:#172033;
+}
+.ok{background:#eaf8ee;color:#166534}
+.err{background:#fff0f0;color:#a61b2b}
+button{
+  width:100%;
+  border:0;
+  border-radius:10px;
+  padding:13px;
+  margin-top:10px;
+  background:#172033;
+  color:white;
+  font-weight:700;
+  font-size:15px;
+  cursor:pointer;
+}
+#retryBtn{display:none}
+.small{
+  font-size:13px;
+  color:#cbd5e1;
+  margin-top:12px;
+  line-height:1.5;
+}
+</style>
+</head>
+
+<body>
+<div class="app">
+  <h1>QR Inventory Scanner</h1>
+  <div class="sub">Point the camera at an inventory QR code.</div>
+
+  <div class="card">
+    <div id="reader"></div>
+    <div id="status" class="status">
+      Requesting camera access...
+    </div>
+
+    <button id="retryBtn">Retry Camera</button>
+    <button id="closeBtn">Close Scanner</button>
+  </div>
+
+  <div class="small">
+    Camera access requires HTTPS. If permission is denied, use your browser's
+    site settings to allow camera access, then press Retry Camera.
+  </div>
+</div>
+
+<script>
+let scanner=null;
+let scannerStarted=false;
+let scanLocked=false;
+
+function $(id){
+  return document.getElementById(id);
+}
+
+function setStatus(text,type=''){
+  $('status').className='status '+type;
+  $('status').textContent=text;
+}
+
+function sendToParent(type,payload={}){
+  if(window.opener && !window.opener.closed){
+    window.opener.postMessage(
+      Object.assign({type:type},payload),
+      '*'
+    );
+  }
+}
+
+function stopScanner(){
+  if(!scanner || !scannerStarted) return Promise.resolve();
+
+  return scanner.stop()
+    .catch(()=>{})
+    .then(()=>{
+      scannerStarted=false;
+    });
+}
+
+function scanSuccess(decodedText){
+  if(scanLocked) return;
+
+  scanLocked=true;
+
+  const text=String(decodedText||'').trim();
+
+  if(!text){
+    scanLocked=false;
+    return;
+  }
+
+  setStatus('QR found: '+text+' — sending to inventory...','ok');
+
+  sendToParent('QR_SCANNED',{text:text});
+
+  setTimeout(()=>{
+    stopScanner().finally(()=>{
+      if(window.opener && !window.opener.closed){
+        window.close();
+      }
+    });
+  },300);
+}
+
+function scanFailure(errorMessage){
+  // html5-qrcode calls this repeatedly while no QR code is visible.
+  // Do not display every frame's error.
+}
+
+async function startScanner(){
+  scanLocked=false;
+  $('retryBtn').style.display='none';
+  setStatus('Requesting camera permission...');
+
+  try{
+    if(!window.isSecureContext){
+      throw new Error(
+        'Camera access requires a secure HTTPS page. Open scanner.html using HTTPS.'
+      );
+    }
+
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw new Error(
+        'This browser does not provide camera access on this page.'
+      );
+    }
+
+    // Request permission explicitly before starting html5-qrcode.
+    // This makes the permission prompt/error much clearer.
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:{ideal:'environment'}
+      },
+      audio:false
+    });
+
+    stream.getTracks().forEach(track=>track.stop());
+
+    if(scanner){
+      try{
+        await stopScanner();
+      }catch(e){}
+    }
+
+    scanner=new Html5Qrcode('reader');
+
+    const config={
+      fps:10,
+      qrbox:{width:250,height:250},
+      aspectRatio:1.0
+    };
+
+    await scanner.start(
+      {facingMode:{ideal:'environment'}},
+      config,
+      scanSuccess,
+      scanFailure
+    );
+
+    scannerStarted=true;
+    setStatus('Camera ready. Point it at a QR code.');
+  }
+  catch(error){
+    console.error(error);
+
+    let message='Unable to access the camera.';
+
+    if(error.name==='NotAllowedError'){
+      message='Camera permission was denied. Allow camera access for this HTTPS scanner page, then press Retry Camera.';
+    }else if(error.name==='NotFoundError'){
+      message='No camera was found on this device.';
+    }else if(error.name==='NotReadableError'){
+      message='The camera is already being used by another application.';
+    }else if(error.name==='SecurityError'){
+      message='The browser blocked camera access for security reasons. Make sure this page is HTTPS.';
+    }else if(error.message){
+      message=error.message;
+    }
+
+    setStatus(message,'err');
+    $('retryBtn').style.display='block';
+
+    sendToParent('QR_SCANNER_ERROR',{message:message});
+  }
+}
+
+$('retryBtn').onclick=startScanner;
+
+$('closeBtn').onclick=()=>{
+  stopScanner().finally(()=>{
+    if(window.opener && !window.opener.closed){
+      window.close();
+    }else{
+      history.back();
+    }
+  });
+};
+
+window.addEventListener('beforeunload',()=>{
+  stopScanner();
+});
+
+window.addEventListener('load',()=>{
+  startScanner();
+});
+</script>
+</body>
+</html>
